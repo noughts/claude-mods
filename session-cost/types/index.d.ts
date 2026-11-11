@@ -14,7 +14,10 @@ export type Measured = Readonly<{
 
 // Claude が動いていた時間と、その計測を始めた時点のコスト。
 export type Active = Readonly<{
-  ms: number
+  // メインのターンの長さの合計。ツールの実行時間を含む。
+  turnMs: number
+  // モデルへのリクエストにかかった時間の合計。サブエージェントの分も含む。
+  apiMs: number
   baselineUsd?: number
 }>
 

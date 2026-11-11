@@ -48,10 +48,17 @@ test('計測されたコストと積算したトークンを表示する', async
       cost: { usd: 0.2345 },
     },
   }))
-  // セッション開始（時刻 0）から 90 分後。
-  on('clock.now', () => ({ value: 90 * 60_000 }))
+  // セッション開始（時刻 0）から 90 分後に始まる。
+  on('clock.now', () => ({ value: now }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
   on('turn.complete', () => ({ text: '' }))
+  // エンジンの代役: モデルへのリクエスト 1 回に 6 分かかる。
+  let now = 90 * 60_000
+  on('turn.step', async function* (_, e) {
+    now += 6 * 60_000
+
+    return { ...e, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
   // エンジンの代役: 渡されたモードのラベルをそのまま 1 行に描く。
   on('ui.render', ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -80,6 +87,23 @@ test('計測されたコストと積算したトークンを表示する', async
     cache_read_input_tokens: 1_000_000,
     cache_creation_input_tokens: 0,
   }
+  // ターンごとにリクエスト 1 回。うち 1 回はサブエージェントのもの。
+  // ストリームは最後まで読んで初めて終わる。
+  const readAll = async (stream: AsyncIterable<unknown>) => {
+    for await (const _ of stream);
+  }
+  await readAll(
+    $.turn.step({ turnId: 'a', index: 0, model: 'm', messageCount: 1 }),
+  )
+  await readAll(
+    $.turn.step({
+      turnId: 'sub',
+      index: 0,
+      model: 'm',
+      messageCount: 1,
+      agentId: 'agent-1',
+    }),
+  )
   for (const turnId of ['a', 'b'])
     await $.turn.complete({
       turnId,
@@ -114,13 +138,18 @@ test('計測されたコストと積算したトークンを表示する', async
   expect((await ui.find({ type: 'Text', text: /^\$[\d.]+$/ }))?.text).toBe(
     '$1.23',
   )
-  expect((await ui.find({ type: 'Text', text: /^1時間/ }))?.text).toBe(
-    '1時間30分',
+  expect((await ui.find({ type: 'Text', text: /^実時間/ }))?.text).toBe(
+    '実時間（セッション開始から）: 1時間42分',
   )
-  expect((await ui.find({ type: 'Text', text: /^30分$/ }))?.text).toBe('30分')
-  // mod を入れてからの増分 $1.00 を、稼働 30 分で割る。
-  expect((await ui.find({ type: 'Text', text: /時間$/ }))?.text).toBe(
-    '$2.00/時間',
+  expect((await ui.find({ type: 'Text', text: /^ターン処理/ }))?.text).toBe(
+    'ターン処理（ツール実行を含む）: 30分0秒',
+  )
+  expect((await ui.find({ type: 'Text', text: /^API/ }))?.text).toBe(
+    'API（モデルの応答待ち）: 12分0秒',
+  )
+  // mod を入れてからの増分 $1.00 を、API 時間 12 分で割る。
+  expect((await ui.find({ type: 'Text', text: /\/時間$/ }))?.text).toBe(
+    '$5.00/時間',
   )
   expect((await ui.find({ type: 'Text', text: /^入力/ }))?.text).toBe(
     '入力: 1.2k',

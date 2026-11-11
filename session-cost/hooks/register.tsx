@@ -18,17 +18,22 @@ const measured = atom(
 )
 const active = atom(
   { plugin: 'session-cost', key: 'active' } as const,
-  { ms: 0 } as Active,
-  { shape: 'active-1' },
+  { turnMs: 0, apiMs: 0 } as Active,
+  { shape: 'active-2' },
 )
 
-// 稼働時間を測り始めた時点のコストを一度だけ覚える。時給はそこからの増分で出す。
+// 時間を測り始めた時点のコストを一度だけ覚える。時給はそこからの増分で出す。
 export const withBaseline = (a: Active, usd: number): Active =>
   a.baselineUsd === undefined ? { ...a, baselineUsd: usd } : a
 
 export const addTurn = (a: Active, durationMs: number): Active => ({
   ...a,
-  ms: a.ms + durationMs,
+  turnMs: a.turnMs + durationMs,
+})
+
+export const addApi = (a: Active, durationMs: number): Active => ({
+  ...a,
+  apiMs: a.apiMs + durationMs,
 })
 
 export const addUsage = (total: TokenTotals, usage: ModelUsage): TokenTotals => ({
@@ -49,10 +54,13 @@ export const formatTokens = (count: number): string => {
 }
 
 export const formatDuration = (ms: number): string => {
-  const minutes = Math.max(0, Math.floor(ms / 60_000))
+  const seconds = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(seconds / 60)
   const hours = Math.floor(minutes / 60)
+  if (hours > 0) return `${hours}時間${minutes % 60}分`
+  if (minutes > 0) return `${minutes}分${seconds % 60}秒`
 
-  return hours > 0 ? `${hours}時間${minutes % 60}分` : `${minutes}分`
+  return `${seconds}秒`
 }
 
 // 1 分未満は割る時間が短すぎて意味のある値にならないので出さない。
@@ -102,8 +110,21 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // モデルへのリクエスト 1 回ごとに、送ってから応答が終わるまでの時間を足す。
+  // /cost の API 時間と同じく、サブエージェントのリクエストも数える。
+  on('turn.step', async function* ($, e, next) {
+    const startedAt = await $.clock.now()
+    try {
+      return yield* next(e)
+    } finally {
+      // 中断や失敗で終わったリクエストの時間も数える。
+      const endedAt = await $.clock.now()
+      await update($, active, a => addApi(a, endedAt - startedAt))
+    }
+  })
+
   // ターン（サブエージェントのものを含む）が終わるたびにトークン数を積算する。
-  // 稼働時間はメインのターンだけ足す。サブエージェントの時間はその中に重なる。
+  // ターン処理時間はメインのターンだけ足す。サブエージェントの時間はその中に重なる。
   on('turn.complete', async ($, e, next) => {
     const { usage, agentId, durationMs } = e
     if (usage) await update($, tokens, total => addUsage(total, usage))
@@ -152,7 +173,7 @@ export const register: Register = on => {
     const rate =
       m.usd === undefined || a.baselineUsd === undefined
         ? undefined
-        : hourlyUsd(m.usd - a.baselineUsd, a.ms)
+        : hourlyUsd(m.usd - a.baselineUsd, a.apiMs)
     const rows: ReadonlyArray<readonly [string, number]> = [
       ['入力', t.input],
       ['出力', t.output],
@@ -165,14 +186,13 @@ export const register: Register = on => {
         <Text dimColor>コスト（セッション累計）</Text>
         <Text bold>{m.usd === undefined ? '—' : formatUsd(m.usd)}</Text>
         <Text> </Text>
-        <Text dimColor>経過時間（セッション開始から）</Text>
-        <Text>{formatDuration(elapsedMs)}</Text>
-        <Text> </Text>
-        <Text dimColor>稼働時間（このパネルを入れてから）</Text>
-        <Text>{formatDuration(a.ms)}</Text>
-        <Text> </Text>
-        <Text dimColor>Claude の時給（稼働時間あたり）</Text>
+        <Text dimColor>Claude の時給（API 時間あたり）</Text>
         <Text bold>{rate === undefined ? '—' : `${formatUsd(rate)}/時間`}</Text>
+        <Text> </Text>
+        <Text dimColor>時間</Text>
+        <Text>実時間（セッション開始から）: {formatDuration(elapsedMs)}</Text>
+        <Text>ターン処理（ツール実行を含む）: {formatDuration(a.turnMs)}</Text>
+        <Text>API（モデルの応答待ち）: {formatDuration(a.apiMs)}</Text>
         <Text> </Text>
         <Text dimColor>トークン（このパネルを入れてからの累計）</Text>
         {rows.map(([label, count]) => (
