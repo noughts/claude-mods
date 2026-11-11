@@ -1,0 +1,11 @@
+{
+  "name": "noughts",
+  "owner": { "name": "noughts" },
+  "plugins": [
+    {
+      "name": "session-cost",
+      "source": "./session-cost",
+      "description": "このセッションのコストをプロンプト下に表示し、クリックでトークンの内訳と Claude の時給をパネルに出す"
+    }
+  ]
+}
