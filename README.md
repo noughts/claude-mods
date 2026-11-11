@@ -41,6 +41,20 @@ claude plugin install session-cost --marketplace noughts/claude-mods
 
 デスクトップアプリでは `/plugin` が動かないので、プロンプト欄の横の + → Plugins → Add marketplace に `noughts/claude-mods` を入力 → Add plugin の順に操作します。
 
+## アップデート
+
+シェルから、マーケットプレイスの情報を取り直してから mod を更新します。
+
+```
+claude plugin marketplace update noughts
+```
+
+```
+claude plugin update session-cost@noughts
+```
+
+更新は、次に始めるセッションから反映されます。
+
 ## 注意
 
 mod の API は早期アクセス段階で、Claude Code の更新で予告なく変わることがあります。動作を確認したのは Claude Code 2.1.321 のデスクトップアプリです。
