@@ -1,51 +1,51 @@
 # claude-mods
 
-Claude Code（ターミナルとデスクトップアプリ）向けの mod 置き場です。mod は Claude 自身の画面や挙動を変える拡張で、プラグインとしてインストールします。
+Mods for Claude Code (terminal and desktop app). A mod is an extension that changes Claude's own interface or behaviour, and is installed as a plugin.
 
-## 収録している mod
+## Mods
 
 ### session-cost
 
-そのセッションでかかっているコストを、プロンプト下のモデル名の左に `コスト $3.55` の形で常時表示します。
+Shows what the current session has cost so far, next to the model name under the prompt, as `Cost $3.55`.
 
-表示をクリックするか `/session-cost` を実行すると、詳細パネルが開閉します。パネルには次の項目が出ます。
+Click it, or run `/session-cost`, to open or close a details panel. The panel shows:
 
-- コスト（セッション累計のドル額）
-- Claude の時給（API 時間の間に増えたコスト ÷ API 時間）
-- 時間の内訳
-  - 実時間: セッション開始からの時間。`/cost` の wall に近い値です
-  - ターン処理: メインのターンの長さの合計。ビルドなどツールの実行時間を含みます
-  - API: モデルへのリクエストを送ってから応答が終わるまでの時間の合計。サブエージェントの分も含み、`/cost` の API に近い値です
-- トークンの内訳（入力・出力・キャッシュ読み込み・キャッシュ書き込み）
-- コンテキストの使用量と割合
+- Cost (session total, in US dollars)
+- Claude's hourly rate (the cost added during API time ÷ API time)
+- Time breakdown
+  - Wall: time since the session started. Close to the wall duration in `/cost`
+  - Turns: total length of the main turns, including tool runs such as builds
+  - API: total time from sending each model request until its response ends, subagents included. Close to the API duration in `/cost`
+- Token breakdown (input, output, cache read, cache write)
+- Context usage and percentage
 
-時給を API 時間で割るのは、ビルド待ちのようにトークンを使わない時間の長さで、プロジェクトごとに時給が変わってしまうのを避けるためです。
+The hourly rate is divided by API time so that time spent without using tokens, such as waiting on a build, does not make the rate differ from project to project.
 
-ターン処理・API・時給・トークンの内訳は、mod を入れた時点から数え始めます。表示はターンが終わるたびに更新されます。
+Turns, API, the hourly rate and the token breakdown start counting when the mod is added. The display updates at the end of each turn.
 
-表示は日本語と英語に対応しています。OS の言語が日本語なら日本語、それ以外は英語で出ます。macOS ではシステムの優先言語を、それ以外ではロケールの環境変数（`LC_ALL`、`LC_MESSAGES`、`LANG`）を見ます。
+The display is available in English and Japanese. It is shown in Japanese when the OS language is Japanese, and in English otherwise. On macOS the mod reads the system's preferred language by running `defaults read -g AppleLanguages` once at session start; elsewhere it reads the locale environment variables (`LC_ALL`, `LC_MESSAGES`, `LANG`).
 
-## インストール
+## Install
 
-ターミナルのセッションのプロンプトで:
+At the prompt of a terminal session:
 
 ```
 /plugin install session-cost --marketplace noughts/claude-mods
 ```
 
-シェルから:
+From a shell:
 
 ```
 claude plugin install session-cost --marketplace noughts/claude-mods
 ```
 
-`Add marketplace?` と聞かれたら `y` で答え、スコープは user を選びます。
+Answer `y` to `Add marketplace?`, then choose the user scope.
 
-デスクトップアプリでは `/plugin` が動かないので、プロンプト欄の横の + → Plugins → Add marketplace に `noughts/claude-mods` を入力 → Add plugin の順に操作します。
+In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `noughts/claude-mods`, then Add plugin.
 
-## アップデート
+## Update
 
-シェルから、マーケットプレイスの情報を取り直してから mod を更新します。
+From a shell, refresh the marketplace, then update the mod:
 
 ```
 claude plugin marketplace update noughts
@@ -55,12 +55,12 @@ claude plugin marketplace update noughts
 claude plugin update session-cost@noughts
 ```
 
-更新は、次に始めるセッションから反映されます。
+The update applies to sessions started afterwards.
 
-## 注意
+## Notes
 
-mod の API は早期アクセス段階で、Claude Code の更新で予告なく変わることがあります。動作を確認したのは Claude Code 2.1.321 のデスクトップアプリです。
+The mod API is in early access and may change between Claude Code releases without notice. This mod was checked on the desktop app of Claude Code 2.1.321.
 
-## ライセンス
+## License
 
 MIT
