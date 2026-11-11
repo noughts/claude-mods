@@ -91,6 +91,8 @@ test('計測されたコストと積算したトークンを表示する', async
 
   // まだ動いていないので時給は出ない。
   const before = await $.ui.mount(PANE)
+  // 1 ドル未満でも小数点以下 2 桁で出す。
+  expect((await before.find({ type: 'Text', text: /^\$/ }))?.text).toBe('$0.23')
   expect((await before.find({ type: 'Text', text: /^—$/ }))?.text).toBe('—')
   await before.unmount()
 

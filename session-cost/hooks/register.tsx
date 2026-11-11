@@ -67,8 +67,7 @@ export const addUsage = (total: TokenTotals, usage: ModelUsage): TokenTotals => 
   cacheWrite: total.cacheWrite + usage.cache_creation_input_tokens,
 })
 
-export const formatUsd = (usd: number): string =>
-  `$${usd.toFixed(usd < 1 ? 4 : 2)}`
+export const formatUsd = (usd: number): string => `$${usd.toFixed(2)}`
 
 export const formatTokens = (count: number): string => {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(2)}M`
