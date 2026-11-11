@@ -21,12 +21,16 @@ export type Active = Readonly<{
   baselineUsd?: number
 }>
 
+// 表示に使う言語。OS の言語設定から決める。
+export type Language = 'ja' | 'en'
+
 declare module 'claude-code' {
   interface PluginState {
     'session-cost': {
       tokens: Shaped<TokenTotals>
       measured: Shaped<Measured>
       active: Shaped<Active>
+      language: Shaped<Language>
     }
   }
 }

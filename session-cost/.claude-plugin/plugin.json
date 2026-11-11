@@ -1,6 +1,6 @@
 {
   "name": "session-cost",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "このセッションのコストをプロンプト下に表示し、クリックでトークンの内訳と Claude の時給をパネルに出す",
   "types": "./types/index.d.ts",
   "license": "MIT"

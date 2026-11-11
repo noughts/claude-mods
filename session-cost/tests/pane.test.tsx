@@ -1,3 +1,4 @@
+import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
 const PANE = {
@@ -15,7 +16,26 @@ const PANE = {
   },
 } as const
 
+// エンジンの代役: macOS の優先言語と、ロケールの環境変数を答える。
+const answerLanguage = (
+  on: On,
+  apple: string | undefined,
+  lang: string | undefined,
+) => {
+  on('process.run', () => ({
+    value: {
+      exitCode: apple === undefined ? 1 : 0,
+      stdout: apple === undefined ? '' : `(\n    "${apple}",\n    "en-JP"\n)\n`,
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }))
+  on('env.get', (_, e) => ({ value: e.name === 'LANG' ? lang : undefined }))
+}
+
 test('計測されたコストと積算したトークンを表示する', async ($, on) => {
+  answerLanguage(on, 'ja-JP', 'en_US.UTF-8')
   on('command.register', () => ({ value: { command: 'session-cost' } }))
   // エンジンの代役: 開いているパネルの id を覚えておく。
   let openPanes: ReadonlyArray<string> = []
@@ -162,6 +182,52 @@ test('計測されたコストと積算したトークンを表示する', async
   )
   expect((await ui.find({ type: 'Text', text: /%/ }))?.text).toBe(
     '50.0k（25%）',
+  )
+  await ui.unmount()
+})
+
+test('OS の言語が日本語でなければ英語で表示する', async ($, on) => {
+  // macOS ではない環境で、ロケールがフランス語。
+  answerLanguage(on, undefined, 'fr_FR.UTF-8')
+  on('command.register', () => ({ value: { command: 'session-cost' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      context: { window: 200000, tokens: 50000, percent: 25 },
+      rateLimits: [],
+      cost: { usd: 2.5 },
+    },
+  }))
+  on('clock.now', () => ({ value: 45_000 }))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ type: 'Text', text: /^Cost/ }))?.text).toBe(
+    'Cost (session total)',
+  )
+  expect((await ui.find({ type: 'Text', text: /^Wall/ }))?.text).toBe(
+    'Wall (since session start): 45s',
+  )
+  expect((await ui.find({ type: 'Text', text: /%/ }))?.text).toBe('50.0k (25%)')
+  await ui.unmount()
+})
+
+test('macOS の優先言語が日本語なら、ロケールの環境変数より優先して日本語にする', async ($, on) => {
+  answerLanguage(on, 'ja-JP', 'en_US.UTF-8')
+  on('command.register', () => ({ value: { command: 'session-cost' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.usage', () => ({
+    value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] },
+  }))
+  on('clock.now', () => ({ value: 0 }))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ type: 'Text', text: /^コスト/ }))?.text).toBe(
+    'コスト（セッション累計）',
   )
   await ui.unmount()
 })

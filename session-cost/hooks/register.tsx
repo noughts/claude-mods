@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { ModelUsage, Register } from 'claude-code'
+import type { EngineInterface, ModelUsage, Register } from 'claude-code'
 
-import type { Active, Measured, TokenTotals } from '../types'
+import type { Active, Language, Measured, TokenTotals } from '../types'
+import { firstAppleLanguage, messages, pickLanguage } from './messages'
+import type { Messages } from './messages'
 
 const PANE = 'session-cost'
-const TITLE = 'セッションコスト'
 
 const ZERO: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 
@@ -21,6 +22,29 @@ const active = atom(
   { turnMs: 0, apiMs: 0 } as Active,
   { shape: 'active-2' },
 )
+
+const language = atom(
+  { plugin: 'session-cost', key: 'language' } as const,
+  'en' as Language,
+  { shape: 'language-1' },
+)
+
+// 副作用: OS の言語設定を読む。macOS はシステムの優先言語、それ以外はロケールの環境変数。
+const detectLanguage = async ($: EngineInterface): Promise<Language> => {
+  const apple = await $.process
+    .run(['defaults', 'read', '-g', 'AppleLanguages'])
+    .then(
+      ran => (ran.exitCode === 0 ? firstAppleLanguage(ran.stdout) : undefined),
+      () => undefined,
+    )
+
+  return pickLanguage([
+    apple,
+    await $.env.get('LC_ALL'),
+    await $.env.get('LC_MESSAGES'),
+    await $.env.get('LANG'),
+  ])
+}
 
 // 時間を測り始めた時点のコストを一度だけ覚える。時給はそこからの増分で出す。
 export const withBaseline = (a: Active, usd: number): Active =>
@@ -53,21 +77,21 @@ export const formatTokens = (count: number): string => {
   return String(count)
 }
 
-export const formatDuration = (ms: number): string => {
+export const formatDuration = (ms: number, t: Messages): string => {
   const seconds = Math.max(0, Math.floor(ms / 1000))
   const minutes = Math.floor(seconds / 60)
   const hours = Math.floor(minutes / 60)
-  if (hours > 0) return `${hours}時間${minutes % 60}分`
-  if (minutes > 0) return `${minutes}分${seconds % 60}秒`
+  if (hours > 0) return t.hoursMinutes(hours, minutes % 60)
+  if (minutes > 0) return t.minutesSeconds(minutes, seconds % 60)
 
-  return `${seconds}秒`
+  return t.seconds(seconds)
 }
 
 // 1 分未満は割る時間が短すぎて意味のある値にならないので出さない。
 export const hourlyUsd = (usd: number, elapsedMs: number): number | undefined =>
   elapsedMs < 60_000 ? undefined : usd / (elapsedMs / 3_600_000)
 
-type Measurement =Readonly<{
+type Measurement = Readonly<{
   cost?: Readonly<{ usd: number }>
   context: Readonly<{ tokens?: number; percent?: number }>
 }>
@@ -81,14 +105,16 @@ const toMeasured = (m: Measurement): Measured => ({
 })
 
 // プロンプト下に常時出す表示。詳細は /session-cost のパネルで見る。
-export const statusText = (m: Measured): string | undefined =>
-  m.usd === undefined ? undefined : `コスト ${formatUsd(m.usd)}`
+export const statusText = (m: Measured, t: Messages): string | undefined =>
+  m.usd === undefined ? undefined : t.status(formatUsd(m.usd))
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    const detected = await detectLanguage($)
+    await update($, language, () => detected)
     await $.command.register({
       name: 'session-cost',
-      description: 'このセッションのコストとトークンの内訳をパネルに表示する',
+      description: messages[detected].commandDescription,
     })
     const usage = await $.session.usage()
     await update($, measured, () => toMeasured(usage))
@@ -98,9 +124,10 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'session-cost' }, async $ => {
-    await $.ui.open({ id: PANE, title: TITLE })
+    const t = messages[await read($, language)]
+    await $.ui.open({ id: PANE, title: t.title })
 
-    return { text: 'セッションコストのパネルを開きました。' }
+    return { text: t.paneOpened }
   })
 
   // エンジンが計測するたびに届く、セッション全体のコストとコンテキスト使用量。
@@ -137,7 +164,8 @@ export const register: Register = on => {
   // $.ui.status と違い mod 名のラベルが付かない。
   // PromptHint への追記はデスクトップでは描かれなかった。
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    const text = statusText(await read($, measured))
+    const t = messages[await read($, language)]
+    const text = statusText(await read($, measured), t)
     if (text === undefined) return next(e)
 
     // デスクトップは modes の書き換えを描かないので、自前の木で描く。
@@ -147,7 +175,7 @@ export const register: Register = on => {
       const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
       await (isOpen
         ? $.ui.close({ id: PANE })
-        : $.ui.open({ id: PANE, title: TITLE }))
+        : $.ui.open({ id: PANE, title: t.title }))
     }
 
     return (
@@ -164,8 +192,9 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
+    const t = messages[await read($, language)]
     const m = await read($, measured)
-    const t = await read($, tokens)
+    const total = await read($, tokens)
     // 副作用: セッションの開始時刻と現在時刻を読む。
     const { startedAt } = await $.session.usage()
     const elapsedMs = (await $.clock.now()) - startedAt
@@ -175,37 +204,46 @@ export const register: Register = on => {
         ? undefined
         : hourlyUsd(m.usd - a.baselineUsd, a.apiMs)
     const rows: ReadonlyArray<readonly [string, number]> = [
-      ['入力', t.input],
-      ['出力', t.output],
-      ['キャッシュ読み込み', t.cacheRead],
-      ['キャッシュ書き込み', t.cacheWrite],
+      [t.input, total.input],
+      [t.output, total.output],
+      [t.cacheRead, total.cacheRead],
+      [t.cacheWrite, total.cacheWrite],
     ]
 
     return (
       <Box flexDirection="column">
-        <Text dimColor>コスト（セッション累計）</Text>
+        <Text dimColor>{t.cost}</Text>
         <Text bold>{m.usd === undefined ? '—' : formatUsd(m.usd)}</Text>
         <Text> </Text>
-        <Text dimColor>Claude の時給（API 時間あたり）</Text>
-        <Text bold>{rate === undefined ? '—' : `${formatUsd(rate)}/時間`}</Text>
+        <Text dimColor>{t.rate}</Text>
+        <Text bold>{rate === undefined ? '—' : t.perHour(formatUsd(rate))}</Text>
         <Text> </Text>
-        <Text dimColor>時間</Text>
-        <Text>実時間（セッション開始から）: {formatDuration(elapsedMs)}</Text>
-        <Text>ターン処理（ツール実行を含む）: {formatDuration(a.turnMs)}</Text>
-        <Text>API（モデルの応答待ち）: {formatDuration(a.apiMs)}</Text>
+        <Text dimColor>{t.time}</Text>
+        <Text>
+          {t.wall}: {formatDuration(elapsedMs, t)}
+        </Text>
+        <Text>
+          {t.turn}: {formatDuration(a.turnMs, t)}
+        </Text>
+        <Text>
+          {t.api}: {formatDuration(a.apiMs, t)}
+        </Text>
         <Text> </Text>
-        <Text dimColor>トークン（このパネルを入れてからの累計）</Text>
+        <Text dimColor>{t.tokens}</Text>
         {rows.map(([label, count]) => (
           <Text>
             {label}: {formatTokens(count)}
           </Text>
         ))}
         <Text> </Text>
-        <Text dimColor>コンテキスト</Text>
+        <Text dimColor>{t.context}</Text>
         <Text>
           {m.contextTokens === undefined
             ? '—'
-            : `${formatTokens(m.contextTokens)}（${m.contextPercent ?? 0}%）`}
+            : t.contextValue(
+                formatTokens(m.contextTokens),
+                m.contextPercent ?? 0,
+              )}
         </Text>
       </Box>
     )
