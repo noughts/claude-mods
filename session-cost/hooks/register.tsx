@@ -163,12 +163,19 @@ export const register: Register = on => {
   // $.ui.status と違い mod 名のラベルが付かない。
   // PromptHint への追記はデスクトップでは描かれなかった。
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    const t = messages[await read($, language)]
-    const text = statusText(await read($, measured))
-    if (text === undefined) return next(e)
+    // デスクトップは modes の書き換えを描かないので、下の描画を包む木で描く。
+    // 包むことで、同じ場所に描く他の mod の表示も残る。
+    const [below, lang, m] = await Promise.all([
+      next(e),
+      read($, language),
+      read($, measured),
+    ])
+    const text = statusText(m)
+    if (text === undefined) return below
 
-    // デスクトップは modes の書き換えを描かないので、自前の木で描く。
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const t = messages[lang]
+
+    const { Box, Button } = $.ui.resolve(e)
     // 副作用: クリックで詳細パネルを開き、開いていれば閉じる。
     const togglePane = async () => {
       const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
@@ -179,9 +186,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="row" gap={1}>
-        {e.props.modes.length > 0 && (
-          <Text dimColor>{e.props.modes.join(' & ')}</Text>
-        )}
+        {below}
         <Button key="toggle-pane" plain dimColor onPress={() => void togglePane()}>
           {text}
         </Button>
