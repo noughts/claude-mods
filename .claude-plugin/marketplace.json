@@ -8,6 +8,11 @@
       "name": "session-cost",
       "source": "./session-cost",
       "description": "Shows the session's cost under the prompt; click it for a panel with the token breakdown and Claude's hourly rate"
+    },
+    {
+      "name": "five-hour-usage",
+      "source": "./five-hour-usage",
+      "description": "Shows how much of the 5-hour usage limit is used, under the prompt beside the model name"
     }
   ]
 }

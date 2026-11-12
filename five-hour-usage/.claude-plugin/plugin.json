@@ -1,0 +1,7 @@
+{
+  "name": "five-hour-usage",
+  "version": "0.1.0",
+  "description": "Shows how much of the 5-hour usage limit is used, under the prompt beside the model name",
+  "types": "./types/index.d.ts",
+  "license": "MIT"
+}
