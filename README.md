@@ -6,7 +6,7 @@ Mods for Claude Code (terminal and desktop app). A mod is an extension that chan
 
 ### session-cost
 
-Shows what the current session has cost so far, next to the model name under the prompt, as `Cost $3.55`.
+Shows what the current session has cost so far, next to the model name under the prompt, as `$3.55`.
 
 Click it, or run `/session-cost`, to open or close a details panel. The panel shows:
 

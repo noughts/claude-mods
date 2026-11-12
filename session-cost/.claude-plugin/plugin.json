@@ -1,6 +1,6 @@
 {
   "name": "session-cost",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Shows the session's cost under the prompt; click it for a panel with the token breakdown and Claude's hourly rate",
   "types": "./types/index.d.ts",
   "license": "MIT"

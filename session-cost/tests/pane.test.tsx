@@ -146,7 +146,7 @@ test('計測されたコストと積算したトークンを表示する', async
   })
   expect((await modes.find({ type: 'Text', text: /focus/ }))?.text).toBe('focus')
   expect((await modes.find({ type: 'Button', key: 'toggle-pane' }))?.text).toBe(
-    'コスト $1.23',
+    '$1.23',
   )
 
   // クリックすると詳細パネルが開き、もう一度クリックすると閉じる。

@@ -104,8 +104,8 @@ const toMeasured = (m: Measurement): Measured => ({
 })
 
 // プロンプト下に常時出す表示。詳細は /session-cost のパネルで見る。
-export const statusText = (m: Measured, t: Messages): string | undefined =>
-  m.usd === undefined ? undefined : t.status(formatUsd(m.usd))
+export const statusText = (m: Measured): string | undefined =>
+  m.usd === undefined ? undefined : formatUsd(m.usd)
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -164,7 +164,7 @@ export const register: Register = on => {
   // PromptHint への追記はデスクトップでは描かれなかった。
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     const t = messages[await read($, language)]
-    const text = statusText(await read($, measured), t)
+    const text = statusText(await read($, measured))
     if (text === undefined) return next(e)
 
     // デスクトップは modes の書き換えを描かないので、自前の木で描く。
