@@ -104,8 +104,9 @@ const toMeasured = (m: Measurement): Measured => ({
 })
 
 // プロンプト下に常時出す表示。詳細は /session-cost のパネルで見る。
+// 隣に並ぶ他の mod の表示と区切る。プロンプト下のモード表示は Svg を描かないので絵文字にする。
 export const statusText = (m: Measured): string | undefined =>
-  m.usd === undefined ? undefined : formatUsd(m.usd)
+  m.usd === undefined ? undefined : `💰${formatUsd(m.usd)}`
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
