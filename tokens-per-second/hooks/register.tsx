@@ -22,7 +22,8 @@ export const addRequest = (
 export const tokensPerSecond = (t: Totals): number | undefined =>
   t.apiMs > 0 ? t.outputTokens / (t.apiMs / 1000) : undefined
 
-export const formatRate = (rate: number): string => `${Math.round(rate)} tok/s`
+// 隣に並ぶ他の mod の表示と区切る。プロンプト下のモード表示は Svg を描かないので絵文字にする。
+export const formatRate = (rate: number): string => `⚡️${Math.round(rate)}tok/s`
 
 export const register: Register = on => {
   // モデルへのリクエスト 1 回ごとに、送ってから応答が終わるまでの時間と、
