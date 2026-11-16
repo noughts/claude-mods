@@ -27,11 +27,11 @@ The display is available in English and Japanese. It is shown in Japanese when t
 
 ### five-hour-usage
 
-Shows how much of the 5-hour usage limit is used, under the prompt beside the model name, as `5h 90%`.
+Shows how much of the 5-hour usage limit is used, under the prompt beside the model name, as `⏳5h 90%`.
 
 The usage ring in the desktop app shows whichever limit is closest to running out, so it can read 90% because of the weekly limit while the 5-hour window is barely used. This mod shows the 5-hour window alone.
 
-The figure comes from the usage limits that the latest API response reported, and it updates each time it moves by a point. Once the window's reset time has passed, it shows `5h 0%` until the next response. Nothing is shown before the first reading, or when the account has no 5-hour limit, as with API billing.
+The figure comes from the usage limits that the latest API response reported, and it updates each time it moves by a point. Once the window's reset time has passed, it shows `⏳5h 0%` until the next response. Nothing is shown before the first reading, or when the account has no 5-hour limit, as with API billing.
 
 ### tokens-per-second
 

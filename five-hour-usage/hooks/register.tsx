@@ -54,8 +54,9 @@ export const register: Register = on => {
     return (
       <Box flexDirection="row" gap={1}>
         {below}
+        {/* 隣に並ぶ他の mod の表示と区切る。プロンプト下のモード表示は Svg を描かないので絵文字にする。 */}
         <Text dimColor tabular>
-          {`5h ${Math.round(percentAt(limit, now))}%`}
+          {`⏳5h ${Math.round(percentAt(limit, now))}%`}
         </Text>
       </Box>
     )

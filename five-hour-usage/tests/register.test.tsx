@@ -35,7 +35,7 @@ type Drawing = Readonly<{
 }>
 
 const fiveHourText = async (ui: Drawing) =>
-  (await ui.find({ type: 'Text', text: /^5h/ }))?.text
+  (await ui.find({ type: 'Text', text: /^⏳5h/ }))?.text
 
 test('週間の上限が逼迫していても、5 時間ウィンドウの使用率を表示する', async ($, on) => {
   mock.clock(on, { now: NOW })
@@ -49,7 +49,7 @@ test('週間の上限が逼迫していても、5 時間ウィンドウの使用
   const ui = await $.ui.mount(SESSION_MODE)
   // 他の表示を消さずに、その横に足す。
   expect((await ui.find({ type: 'Text', text: /focus/ }))?.text).toBe('focus')
-  expect(await fiveHourText(ui)).toBe('5h 13%')
+  expect(await fiveHourText(ui)).toBe('⏳5h 13%')
   await ui.unmount()
 })
 
@@ -66,11 +66,11 @@ test('使用率が動くたびに表示を更新し、リセット時刻を過�
     rateLimits: [{ kind: 'five_hour', percentUsed: 90, resetsAt: RESETS_AT_ISO }],
     changed: ['rateLimits'],
   })
-  expect(await fiveHourText(ui)).toBe('5h 90%')
+  expect(await fiveHourText(ui)).toBe('⏳5h 90%')
 
   // 応答がないまま、開いている表示がリセット時刻の 1 分後までに描き直される。
   await clock.set(RESETS_AT + 60_000)
-  expect(await fiveHourText(ui)).toBe('5h 0%')
+  expect(await fiveHourText(ui)).toBe('⏳5h 0%')
   await ui.unmount()
 })
 
