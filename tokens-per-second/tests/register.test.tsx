@@ -67,7 +67,7 @@ test('リクエストの合計時間あたりの出力トークン数を、他�
 
   await readAll($.turn.step({ turnId: 'main', index: 0, model: 'm', messageCount: 1 }))
   // 1200 トークンを 20 秒で。
-  expect(await rateText()).toBe('60 tok/s')
+  expect(await rateText()).toBe('⚡️60tok/s')
 
   // サブエージェントのリクエストも数える。応答が返らなかったリクエストは数えない。
   await readAll(
@@ -83,7 +83,7 @@ test('リクエストの合計時間あたりの出力トークン数を、他�
     $.turn.step({ turnId: 'aborted', index: 1, model: 'm', messageCount: 3 }),
   )
   // 1500 トークンを 30 秒で。
-  expect(await rateText()).toBe('50 tok/s')
+  expect(await rateText()).toBe('⚡️50tok/s')
   expect((await ui.find({ type: 'Text', text: /focus/ }))?.text).toBe('focus')
   await ui.unmount()
 })

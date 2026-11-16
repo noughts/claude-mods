@@ -35,7 +35,7 @@ The figure comes from the usage limits that the latest API response reported, an
 
 ### tokens-per-second
 
-Shows the session's average output speed under the prompt beside the model name, as `68 tok/s`.
+Shows the session's average output speed under the prompt beside the model name, as `⚡️68tok/s`.
 
 The speed is the tokens the model generated, thinking included, divided by API time: the total time from sending each model request until its response ends, subagents included, measured as in session-cost. API time includes the wait before the first token and any retries, so the figure is lower than the speed at which text streams. A request that ends without a response, such as an interrupted one, is left out, since its token count is unknown.
 
