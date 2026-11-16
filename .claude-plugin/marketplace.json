@@ -13,6 +13,11 @@
       "name": "five-hour-usage",
       "source": "./five-hour-usage",
       "description": "Shows how much of the 5-hour usage limit is used, under the prompt beside the model name"
+    },
+    {
+      "name": "tokens-per-second",
+      "source": "./tokens-per-second",
+      "description": "Shows the session's average output speed in tokens per second, under the prompt beside the model name"
     }
   ]
 }

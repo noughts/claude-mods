@@ -1,0 +1,7 @@
+{
+  "name": "tokens-per-second",
+  "version": "0.1.0",
+  "description": "Shows the session's average output speed in tokens per second, under the prompt beside the model name",
+  "types": "./types/index.d.ts",
+  "license": "MIT"
+}
