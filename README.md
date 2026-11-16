@@ -33,9 +33,17 @@ The usage ring in the desktop app shows whichever limit is closest to running ou
 
 The figure comes from the usage limits that the latest API response reported, and it updates each time it moves by a point. Once the window's reset time has passed, it shows `5h 0%` until the next response. Nothing is shown before the first reading, or when the account has no 5-hour limit, as with API billing.
 
+### tokens-per-second
+
+Shows the session's average output speed under the prompt beside the model name, as `68 tok/s`.
+
+The speed is the tokens the model generated, thinking included, divided by API time: the total time from sending each model request until its response ends, subagents included, measured as in session-cost. API time includes the wait before the first token and any retries, so the figure is lower than the speed at which text streams. A request that ends without a response, such as an interrupted one, is left out, since its token count is unknown.
+
+Counting starts when the mod is added, and the display updates after each model request. Nothing is shown before the first response.
+
 ## Install
 
-At the prompt of a terminal session (replace `session-cost` with `five-hour-usage` for the other mod):
+At the prompt of a terminal session (replace `session-cost` with `five-hour-usage` or `tokens-per-second` for the other mods):
 
 ```
 /plugin install session-cost --marketplace noughts/claude-mods
@@ -63,7 +71,7 @@ claude plugin marketplace update noughts
 claude plugin update session-cost@noughts
 ```
 
-(`five-hour-usage@noughts` for the other mod.)
+(`five-hour-usage@noughts` or `tokens-per-second@noughts` for the other mods.)
 
 The update applies to sessions started afterwards.
 
