@@ -17,11 +17,14 @@ Click it, or run `/session-cost`, to open or close a details panel. The panel sh
   - Turns: total length of the main turns, including tool runs such as builds
   - API: total time from sending each model request until its response ends, subagents included. Close to the API duration in `/cost`
 - Token breakdown (input, output, cache read, cache write)
+- Workflow breakdown: the part of the cost and tokens that went to the agents of workflows (Ultracode, and any other Workflow tool run), shown once a workflow agent has responded in the session. Agents that a workflow agent starts are counted with it
 - Context usage and percentage
 
 The hourly rate is divided by API time so that time spent without using tokens, such as waiting on a build, does not make the rate differ from project to project.
 
-Turns, API, the hourly rate and the token breakdown start counting when the mod is added. The display updates at the end of each turn.
+Turns, API, the hourly rate and the token breakdown start counting when the mod is added. The display updates after each model request, subagents and workflow agents included, so it keeps up while a workflow runs in the background.
+
+The workflow cost is the increase in the session cost read after each workflow agent's request. While the main thread and a workflow are both running, cost that is not a model response of either, such as a compaction, auto mode's classifier or another mod's model call, goes to whichever side's request ends next, and so can a response that ends just before the other side's. A workflow agent that the workflow retries after it stalls or waits out a usage limit runs under a new id that the mod is not told about, so the retry is counted outside the workflow breakdown.
 
 The display is available in English and Japanese. It is shown in Japanese when the OS language is Japanese, and in English otherwise. On macOS the mod reads the system's preferred language by running `defaults read -g AppleLanguages` once at session start; elsewhere it reads the locale environment variables (`LC_ALL`, `LC_MESSAGES`, `LANG`).
 

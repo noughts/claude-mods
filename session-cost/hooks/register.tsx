@@ -1,5 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, ModelUsage, Register } from 'claude-code'
+import type {
+  AgentSpawnInput,
+  EngineInterface,
+  ModelUsage,
+  Register,
+  TurnStepResult,
+} from 'claude-code'
 
 import type { Active, Language, Measured, TokenTotals } from '../types'
 import { firstAppleLanguage, messages, pickLanguage } from './messages'
@@ -12,10 +18,20 @@ const ZERO: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 const tokens = atom({ plugin: 'session-cost', key: 'tokens' } as const, ZERO, {
   shape: 'tokens-1',
 })
+const workflowTokens = atom(
+  { plugin: 'session-cost', key: 'workflowTokens' } as const,
+  ZERO,
+  { shape: 'tokens-1' },
+)
+const workflowAgents = atom(
+  { plugin: 'session-cost', key: 'workflowAgents' } as const,
+  [] as ReadonlyArray<string>,
+  { shape: 'agents-1' },
+)
 const measured = atom(
   { plugin: 'session-cost', key: 'measured' } as const,
-  {} as Measured,
-  { shape: 'measured-1' },
+  { workflowUsd: 0 } as Measured,
+  { shape: 'measured-2' },
 )
 const active = atom(
   { plugin: 'session-cost', key: 'active' } as const,
@@ -67,6 +83,25 @@ export const addUsage = (total: TokenTotals, usage: ModelUsage): TokenTotals => 
   cacheWrite: total.cacheWrite + usage.cache_creation_input_tokens,
 })
 
+// その id のループがワークフロー（Ultracode など）のエージェントか。メインは id を持たない。
+export const isWorkflowAgent = (
+  ids: ReadonlyArray<string>,
+  agentId: string | undefined,
+): boolean => agentId !== undefined && ids.includes(agentId)
+
+// ワークフローのエージェントの起動なら、その id を足す。
+// ワークフローのスクリプトが起動したものと、そのエージェントの中で起動されたもの。
+export const withSpawned = (
+  ids: ReadonlyArray<string>,
+  spawn: Pick<AgentSpawnInput, 'workflow' | 'parentAgentId'>,
+  agentId: string,
+): ReadonlyArray<string> => {
+  const isWorkflow =
+    spawn.workflow !== undefined || isWorkflowAgent(ids, spawn.parentAgentId)
+
+  return isWorkflow && !ids.includes(agentId) ? [...ids, agentId] : ids
+}
+
 export const formatUsd = (usd: number): string => `$${usd.toFixed(2)}`
 
 export const formatTokens = (count: number): string => {
@@ -95,18 +130,64 @@ type Measurement = Readonly<{
   context: Readonly<{ tokens?: number; percent?: number }>
 }>
 
-const toMeasured = (m: Measurement): Measured => ({
-  ...(m.cost ? { usd: m.cost.usd } : {}),
-  ...(m.context.tokens === undefined ? {} : { contextTokens: m.context.tokens }),
-  ...(m.context.percent === undefined
-    ? {}
-    : { contextPercent: m.context.percent }),
-})
+// 読んだコストとコンテキスト使用量を重ねる。
+// 並行するリクエストの読み取りは前後して届くので、コストは大きいほうを残す。
+// ワークフローのリクエストのあとの読み取りなら、前回からの増分をワークフローに割り振る。
+// ワークフローに割り振った分はエンジンの計測値にないので引き継ぐ。
+export const withReading = (
+  m: Measured,
+  reading: Measurement,
+  isWorkflow: boolean,
+): Measured => {
+  const usd = reading.cost?.usd
+  const increase =
+    usd === undefined || m.usd === undefined ? 0 : Math.max(0, usd - m.usd)
+  const latestUsd = m.usd === undefined ? usd : m.usd + increase
+
+  return {
+    ...(latestUsd === undefined ? {} : { usd: latestUsd }),
+    ...(reading.context.tokens === undefined
+      ? {}
+      : { contextTokens: reading.context.tokens }),
+    ...(reading.context.percent === undefined
+      ? {}
+      : { contextPercent: reading.context.percent }),
+    workflowUsd: m.workflowUsd + (isWorkflow ? increase : 0),
+  }
+}
 
 // プロンプト下に常時出す表示。詳細は /session-cost のパネルで見る。
 // 隣に並ぶ他の mod の表示と区切る。プロンプト下のモード表示は Svg を描かないので絵文字にする。
 export const statusText = (m: Measured): string | undefined =>
   m.usd === undefined ? undefined : `💰${formatUsd(m.usd)}`
+
+// パネルのトークンの行。
+const tokenLines = (total: TokenTotals, t: Messages): ReadonlyArray<string> => [
+  `${t.input}: ${formatTokens(total.input)}`,
+  `${t.output}: ${formatTokens(total.output)}`,
+  `${t.cacheRead}: ${formatTokens(total.cacheRead)}`,
+  `${t.cacheWrite}: ${formatTokens(total.cacheWrite)}`,
+]
+
+// 副作用: その時点のセッションのコストを読み、応答のトークン数とあわせて積算する。
+const countResponse = async (
+  $: EngineInterface,
+  agentId: string | undefined,
+  usage: ModelUsage | null | undefined,
+) => {
+  const [reading, ids] = await Promise.all([
+    $.session.usage(),
+    read($, workflowAgents),
+  ])
+  const isWorkflow = isWorkflowAgent(ids, agentId)
+  await Promise.all([
+    update($, measured, m => withReading(m, reading, isWorkflow)),
+    ...(usage ? [update($, tokens, total => addUsage(total, usage))] : []),
+    ...(usage && isWorkflow
+      ? [update($, workflowTokens, total => addUsage(total, usage))]
+      : []),
+  ])
+}
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -116,8 +197,9 @@ export const register: Register = on => {
       name: 'session-cost',
       description: messages[detected].commandDescription,
     })
+    // 再読み込みでも呼ばれる。動いているワークフローの読み取りと前後しても戻らないように重ねる。
     const usage = await $.session.usage()
-    await update($, measured, () => toMeasured(usage))
+    await update($, measured, m => withReading(m, usage, false))
     await update($, active, a => withBaseline(a, usage.cost?.usd ?? 0))
 
     return next(e)
@@ -131,31 +213,50 @@ export const register: Register = on => {
   })
 
   // エンジンが計測するたびに届く、セッション全体のコストとコンテキスト使用量。
+  // メインのターンの終わりにしか届かないので、リクエストごとの更新は turn.step で行う。
   on('session.measure', async ($, e, next) => {
-    await update($, measured, () => toMeasured(e))
+    await update($, measured, m => withReading(m, e, false))
 
     return next(e)
   })
 
+  // ワークフロー（Ultracode など）のエージェントを、起動したときに覚えておく。
+  on('agent.spawn', async ($, e, next) => {
+    const spawned = await next(e)
+    const { agentId } = spawned
+    if (agentId !== undefined)
+      await update($, workflowAgents, ids => withSpawned(ids, e, agentId))
+
+    return spawned
+  })
+
   // モデルへのリクエスト 1 回ごとに、送ってから応答が終わるまでの時間を足す。
   // /cost の API 時間と同じく、サブエージェントのリクエストも数える。
+  // 応答のトークン数を足し、コストを読み直す。メインのターンが終わるのを待たずに、
+  // バックグラウンドのワークフローの分も表示に出すため。
   on('turn.step', async function* ($, e, next) {
     const startedAt = await $.clock.now()
+    let response: TurnStepResult | undefined
     try {
-      return yield* next(e)
+      response = yield* next(e)
+
+      return response
     } finally {
-      // 中断や失敗で終わったリクエストの時間も数える。
-      const endedAt = await $.clock.now()
-      await update($, active, a => addApi(a, endedAt - startedAt))
+      // 中断や失敗で終わったリクエストの時間とコストも数える。
+      // 応答が終わった直後に読み、mod 自身の処理を API 時間にもコストの割り振りにも混ぜない。
+      await Promise.all([
+        $.clock
+          .now()
+          .then(endedAt => update($, active, a => addApi(a, endedAt - startedAt))),
+        countResponse($, e.agentId, response?.usage),
+      ])
     }
   })
 
-  // ターン（サブエージェントのものを含む）が終わるたびにトークン数を積算する。
   // ターン処理時間はメインのターンだけ足す。サブエージェントの時間はその中に重なる。
   on('turn.complete', async ($, e, next) => {
-    const { usage, agentId, durationMs } = e
-    if (usage) await update($, tokens, total => addUsage(total, usage))
-    if (agentId === undefined) await update($, active, a => addTurn(a, durationMs))
+    if (e.agentId === undefined)
+      await update($, active, a => addTurn(a, e.durationMs))
 
     return next(e)
   })
@@ -197,23 +298,24 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
-    const t = messages[await read($, language)]
-    const m = await read($, measured)
-    const total = await read($, tokens)
     // 副作用: セッションの開始時刻と現在時刻を読む。
-    const { startedAt } = await $.session.usage()
-    const elapsedMs = (await $.clock.now()) - startedAt
-    const a = await read($, active)
+    const [lang, m, total, workflow, a, { startedAt }, now] = await Promise.all([
+      read($, language),
+      read($, measured),
+      read($, tokens),
+      read($, workflowTokens),
+      read($, active),
+      $.session.usage(),
+      $.clock.now(),
+    ])
+    const t = messages[lang]
+    const elapsedMs = now - startedAt
     const rate =
       m.usd === undefined || a.baselineUsd === undefined
         ? undefined
         : hourlyUsd(m.usd - a.baselineUsd, a.apiMs)
-    const rows: ReadonlyArray<readonly [string, number]> = [
-      [t.input, total.input],
-      [t.output, total.output],
-      [t.cacheRead, total.cacheRead],
-      [t.cacheWrite, total.cacheWrite],
-    ]
+    // ワークフローを使っていないセッションでは内訳を出さない。
+    const usedWorkflow = Object.values(workflow).some(count => count > 0)
 
     return (
       <Box flexDirection="column">
@@ -235,11 +337,19 @@ export const register: Register = on => {
         </Text>
         <Text> </Text>
         <Text dimColor>{t.tokens}</Text>
-        {rows.map(([label, count]) => (
-          <Text>
-            {label}: {formatTokens(count)}
-          </Text>
+        {tokenLines(total, t).map(line => (
+          <Text>{line}</Text>
         ))}
+        {usedWorkflow
+          ? [
+              <Text> </Text>,
+              <Text dimColor>{t.workflow}</Text>,
+              <Text>
+                {t.workflowCost}: {formatUsd(m.workflowUsd)}
+              </Text>,
+              ...tokenLines(workflow, t).map(line => <Text>{line}</Text>),
+            ]
+          : []}
         <Text> </Text>
         <Text dimColor>{t.context}</Text>
         <Text>
