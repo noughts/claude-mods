@@ -7,31 +7,40 @@ import type {
   TurnStepResult,
 } from 'claude-code'
 
-import type { Active, Language, Measured, TokenTotals } from '../types'
+import type {
+  Active,
+  AgentKind,
+  Language,
+  Measured,
+  TokenTotals,
+} from '../types'
 import { firstAppleLanguage, messages, pickLanguage } from './messages'
 import type { Messages } from './messages'
 
 const PANE = 'session-cost'
+
+// パネルに内訳を並べる順。
+const KINDS: ReadonlyArray<AgentKind> = ['subagent', 'workflow']
+
+type Agents = Readonly<Record<string, AgentKind>>
 
 const ZERO: TokenTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 
 const tokens = atom({ plugin: 'session-cost', key: 'tokens' } as const, ZERO, {
   shape: 'tokens-1',
 })
-const workflowTokens = atom(
-  { plugin: 'session-cost', key: 'workflowTokens' } as const,
-  ZERO,
-  { shape: 'tokens-1' },
+const tokensByKind = atom(
+  { plugin: 'session-cost', key: 'tokensByKind' } as const,
+  { subagent: ZERO, workflow: ZERO },
+  { shape: 'tokens-by-kind-1' },
 )
-const workflowAgents = atom(
-  { plugin: 'session-cost', key: 'workflowAgents' } as const,
-  [] as ReadonlyArray<string>,
-  { shape: 'agents-1' },
-)
+const agents = atom({ plugin: 'session-cost', key: 'agents' } as const, {}, {
+  shape: 'agents-2',
+})
 const measured = atom(
   { plugin: 'session-cost', key: 'measured' } as const,
-  { workflowUsd: 0 } as Measured,
-  { shape: 'measured-2' },
+  { usdByKind: { subagent: 0, workflow: 0 } },
+  { shape: 'measured-3' },
 )
 const active = atom(
   { plugin: 'session-cost', key: 'active' } as const,
@@ -83,23 +92,39 @@ export const addUsage = (total: TokenTotals, usage: ModelUsage): TokenTotals => 
   cacheWrite: total.cacheWrite + usage.cache_creation_input_tokens,
 })
 
-// その id のループがワークフロー（Ultracode など）のエージェントか。メインは id を持たない。
-export const isWorkflowAgent = (
-  ids: ReadonlyArray<string>,
-  agentId: string | undefined,
-): boolean => agentId !== undefined && ids.includes(agentId)
+// その種類のエージェントのトークン数に、応答のトークン数を足す。
+export const addUsageOf = (
+  byKind: Readonly<Record<AgentKind, TokenTotals>>,
+  kind: AgentKind,
+  usage: ModelUsage,
+): Readonly<Record<AgentKind, TokenTotals>> => ({
+  ...byKind,
+  [kind]: addUsage(byKind[kind], usage),
+})
 
-// ワークフローのエージェントの起動なら、その id を足す。
-// ワークフローのスクリプトが起動したものと、そのエージェントの中で起動されたもの。
+// その id のループのエージェントの種類。メインは id を持たない。
+// 起動を知らないループ（エンジンのコンパクションなど）は、どの内訳にも入れない。
+export const kindOf = (
+  known: Agents,
+  agentId: string | undefined,
+): AgentKind | undefined =>
+  agentId === undefined ? undefined : known[agentId]
+
+// 起動されたエージェントの種類を覚える。ワークフローのスクリプトが起動したものと、
+// ワークフローのエージェントの中で起動されたものはワークフロー、それ以外はサブエージェント。
+// 再開したエージェントは同じ id で届くので、覚えた種類のままにする。
 export const withSpawned = (
-  ids: ReadonlyArray<string>,
+  known: Agents,
   spawn: Pick<AgentSpawnInput, 'workflow' | 'parentAgentId'>,
   agentId: string,
-): ReadonlyArray<string> => {
-  const isWorkflow =
-    spawn.workflow !== undefined || isWorkflowAgent(ids, spawn.parentAgentId)
+): Agents => {
+  if (known[agentId] !== undefined) return known
 
-  return isWorkflow && !ids.includes(agentId) ? [...ids, agentId] : ids
+  const isWorkflow =
+    spawn.workflow !== undefined ||
+    kindOf(known, spawn.parentAgentId) === 'workflow'
+
+  return { ...known, [agentId]: isWorkflow ? 'workflow' : 'subagent' }
 }
 
 export const formatUsd = (usd: number): string => `$${usd.toFixed(2)}`
@@ -132,12 +157,12 @@ type Measurement = Readonly<{
 
 // 読んだコストとコンテキスト使用量を重ねる。
 // 並行するリクエストの読み取りは前後して届くので、コストは大きいほうを残す。
-// ワークフローのリクエストのあとの読み取りなら、前回からの増分をワークフローに割り振る。
-// ワークフローに割り振った分はエンジンの計測値にないので引き継ぐ。
+// サブエージェントやワークフローのリクエストのあとの読み取りなら、前回からの増分をその種類に割り振る。
+// 割り振った分はエンジンの計測値にないので引き継ぐ。
 export const withReading = (
   m: Measured,
   reading: Measurement,
-  isWorkflow: boolean,
+  kind: AgentKind | undefined,
 ): Measured => {
   const usd = reading.cost?.usd
   const increase =
@@ -152,7 +177,10 @@ export const withReading = (
     ...(reading.context.percent === undefined
       ? {}
       : { contextPercent: reading.context.percent }),
-    workflowUsd: m.workflowUsd + (isWorkflow ? increase : 0),
+    usdByKind:
+      kind === undefined
+        ? m.usdByKind
+        : { ...m.usdByKind, [kind]: m.usdByKind[kind] + increase },
   }
 }
 
@@ -175,16 +203,16 @@ const countResponse = async (
   agentId: string | undefined,
   usage: ModelUsage | null | undefined,
 ) => {
-  const [reading, ids] = await Promise.all([
+  const [reading, known] = await Promise.all([
     $.session.usage(),
-    read($, workflowAgents),
+    read($, agents),
   ])
-  const isWorkflow = isWorkflowAgent(ids, agentId)
+  const kind = kindOf(known, agentId)
   await Promise.all([
-    update($, measured, m => withReading(m, reading, isWorkflow)),
+    update($, measured, m => withReading(m, reading, kind)),
     ...(usage ? [update($, tokens, total => addUsage(total, usage))] : []),
-    ...(usage && isWorkflow
-      ? [update($, workflowTokens, total => addUsage(total, usage))]
+    ...(usage && kind
+      ? [update($, tokensByKind, byKind => addUsageOf(byKind, kind, usage))]
       : []),
   ])
 }
@@ -197,9 +225,9 @@ export const register: Register = on => {
       name: 'session-cost',
       description: messages[detected].commandDescription,
     })
-    // 再読み込みでも呼ばれる。動いているワークフローの読み取りと前後しても戻らないように重ねる。
+    // 再読み込みでも呼ばれる。動いているサブエージェントやワークフローの読み取りと前後しても戻らないように重ねる。
     const usage = await $.session.usage()
-    await update($, measured, m => withReading(m, usage, false))
+    await update($, measured, m => withReading(m, usage, undefined))
     await update($, active, a => withBaseline(a, usage.cost?.usd ?? 0))
 
     return next(e)
@@ -215,17 +243,17 @@ export const register: Register = on => {
   // エンジンが計測するたびに届く、セッション全体のコストとコンテキスト使用量。
   // メインのターンの終わりにしか届かないので、リクエストごとの更新は turn.step で行う。
   on('session.measure', async ($, e, next) => {
-    await update($, measured, m => withReading(m, e, false))
+    await update($, measured, m => withReading(m, e, undefined))
 
     return next(e)
   })
 
-  // ワークフロー（Ultracode など）のエージェントを、起動したときに覚えておく。
+  // 起動されたエージェントの種類を、起動したときに覚えておく。
   on('agent.spawn', async ($, e, next) => {
     const spawned = await next(e)
     const { agentId } = spawned
     if (agentId !== undefined)
-      await update($, workflowAgents, ids => withSpawned(ids, e, agentId))
+      await update($, agents, known => withSpawned(known, e, agentId))
 
     return spawned
   })
@@ -299,11 +327,11 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     // 副作用: セッションの開始時刻と現在時刻を読む。
-    const [lang, m, total, workflow, a, { startedAt }, now] = await Promise.all([
+    const [lang, m, total, byKind, a, { startedAt }, now] = await Promise.all([
       read($, language),
       read($, measured),
       read($, tokens),
-      read($, workflowTokens),
+      read($, tokensByKind),
       read($, active),
       $.session.usage(),
       $.clock.now(),
@@ -314,8 +342,17 @@ export const register: Register = on => {
       m.usd === undefined || a.baselineUsd === undefined
         ? undefined
         : hourlyUsd(m.usd - a.baselineUsd, a.apiMs)
-    // ワークフローを使っていないセッションでは内訳を出さない。
-    const usedWorkflow = Object.values(workflow).some(count => count > 0)
+    // その種類のエージェントが応答していないセッションでは、その内訳を出さない。
+    const breakdowns = KINDS.filter(kind =>
+      Object.values(byKind[kind]).some(count => count > 0),
+    ).flatMap(kind => [
+      <Text> </Text>,
+      <Text dimColor>{t.ofWhich[kind]}</Text>,
+      <Text>
+        {t.breakdownCost}: {formatUsd(m.usdByKind[kind])}
+      </Text>,
+      ...tokenLines(byKind[kind], t).map(line => <Text>{line}</Text>),
+    ])
 
     return (
       <Box flexDirection="column">
@@ -340,16 +377,7 @@ export const register: Register = on => {
         {tokenLines(total, t).map(line => (
           <Text>{line}</Text>
         ))}
-        {usedWorkflow
-          ? [
-              <Text> </Text>,
-              <Text dimColor>{t.workflow}</Text>,
-              <Text>
-                {t.workflowCost}: {formatUsd(m.workflowUsd)}
-              </Text>,
-              ...tokenLines(workflow, t).map(line => <Text>{line}</Text>),
-            ]
-          : []}
+        {breakdowns}
         <Text> </Text>
         <Text dimColor>{t.context}</Text>
         <Text>

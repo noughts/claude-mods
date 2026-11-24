@@ -5,14 +5,19 @@ export type TokenTotals = Readonly<{
   cacheWrite: number
 }>
 
-// エンジンが計測した値の写しと、そのコストのうちワークフローに割り振った分。
+// 合計とは別に内訳を出すエージェントの種類。
+// workflow: ワークフロー（Ultracode など）が起動したエージェントと、その中で起動されたもの。
+// subagent: それ以外で起動されたエージェント（Agent ツールなど）。
+export type AgentKind = 'subagent' | 'workflow'
+
+// エンジンが計測した値の写しと、そのコストのうち各種類のエージェントに割り振った分。
 // エンジンが持たない値は欠ける。
 export type Measured = Readonly<{
   usd?: number
   contextTokens?: number
   contextPercent?: number
-  // usd のうち、ワークフロー（Ultracode など）のエージェントのリクエストに割り振った分。
-  workflowUsd: number
+  // usd のうち、その種類のエージェントのリクエストに割り振った分。
+  usdByKind: Readonly<Record<AgentKind, number>>
 }>
 
 // Claude が動いていた時間と、その計測を始めた時点のコスト。
@@ -31,10 +36,10 @@ declare module 'claude-code' {
   interface PluginState {
     'session-cost': {
       tokens: Shaped<TokenTotals>
-      // tokens のうち、ワークフロー（Ultracode など）のエージェントの分。
-      workflowTokens: Shaped<TokenTotals>
-      // ワークフローのエージェントの id。その中で起動されたエージェントも含む。
-      workflowAgents: Shaped<ReadonlyArray<string>>
+      // tokens のうち、その種類のエージェントの分。
+      tokensByKind: Shaped<Readonly<Record<AgentKind, TokenTotals>>>
+      // 起動されたエージェントの id と、その種類。
+      agents: Shaped<Readonly<Record<string, AgentKind>>>
       measured: Shaped<Measured>
       active: Shaped<Active>
       language: Shaped<Language>
