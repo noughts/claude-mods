@@ -193,7 +193,7 @@ test('計測されたコストと積算したトークンを表示する', async
   await ui.unmount()
 })
 
-test('ワークフローの実行中もリクエストごとにコストとトークンを更新し、ワークフローの内訳を出す', async ($, on) => {
+test('ワークフローの実行中もリクエストごとにコストとトークンを更新し、サブエージェントとワークフローの内訳を出す', async ($, on) => {
   answerLanguage(on, 'ja-JP', undefined)
   on('command.register', () => ({ value: { command: 'session-cost' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -224,6 +224,7 @@ test('ワークフローの実行中もリクエストごとにコストとト�
     'wf-1': { usd: 2, output: 400 },
     'wf-1-child': { usd: 1, output: 400 },
     'sub-1': { usd: 0.25, output: 100 },
+    'compact-1': { usd: 0.1, output: 100 },
   }
   on('turn.step', async function* (_, e) {
     const { usd, output } = responses[e.agentId ?? 'main'] ?? { usd: 0, output: 0 }
@@ -275,6 +276,8 @@ test('ワークフローの実行中もリクエストごとにコストとト�
   // メインから起動した普通のサブエージェントはワークフローに入れない。
   await spawn({})
   await step($, 'sub', 'sub-1')
+  // 起動を知らないループ（エンジンのコンパクションなど）は、どの内訳にも入れない。
+  await step($, 'compact', 'compact-1')
 
   // メインのターンの終わり（session.measure）を待たずに、その時点のコストを出す。
   const modes = await $.ui.mount({
@@ -284,33 +287,41 @@ test('ワークフローの実行中もリクエストごとにコストとト�
     props: { modes: [] },
   })
   expect((await modes.find({ type: 'Button', key: 'toggle-pane' }))?.text).toBe(
-    '💰$5.85',
+    '💰$5.95',
   )
   await modes.unmount()
 
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /^\$[\d.]+$/ }))?.text).toBe(
-    '$5.85',
+    '$5.95',
   )
   expect((await ui.find({ type: 'Text', text: /^出力/ }))?.text).toBe(
-    '出力: 1.4k',
+    '出力: 1.5k',
   )
-  expect((await ui.find({ type: 'Text', text: /^うちワークフロー/ }))?.text).toBe(
-    'うちワークフロー（Ultracode など）',
-  )
-  // 内訳は合計のあとに並ぶ。コストはワークフローのエージェント 2 つの分。
+  // 内訳は合計のあとに、サブエージェント、ワークフローの順に並ぶ。
   const texts = (await ui.findAll({ type: 'Text' })).map(found => found.text)
-  const breakdown = texts.slice(texts.indexOf('うちワークフロー（Ultracode など）') + 1)
-  expect(breakdown.slice(0, 5)).toEqual([
+  const breakdowns = texts.slice(texts.indexOf('キャッシュ書き込み: 0') + 1)
+  expect(breakdowns.slice(0, 15)).toEqual([
+    ' ',
+    'うちサブエージェント（Agent ツールなど）',
+    'コスト: $0.25',
+    '入力: 1',
+    '出力: 100',
+    'キャッシュ読み込み: 1.00M',
+    'キャッシュ書き込み: 0',
+    ' ',
+    // コストはワークフローのエージェント 2 つの分。
+    'うちワークフロー（Ultracode など）',
     'コスト: $5.00',
     '入力: 3',
     '出力: 1.2k',
     'キャッシュ読み込み: 3.00M',
     'キャッシュ書き込み: 0',
+    ' ',
   ])
   await ui.unmount()
 
-  // メインのターンの終わりに届く計測値は、ワークフローの分に足さない。
+  // メインのターンの終わりに届く計測値は、どの内訳にも足さない。
   ledgerUsd += 0.05
   await $.session.measure({
     context: { window: 200000, tokens: 50000, percent: 25 },
@@ -318,15 +329,17 @@ test('ワークフローの実行中もリクエストごとにコストとト�
     cost: { usd: ledgerUsd },
     changed: ['cost', 'context'],
   })
-  // mod の再読み込みでも session.start が届く。ワークフローに割り振った分は残す。
+  // mod の再読み込みでも session.start が届く。内訳に割り振った分は残す。
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const after = await $.ui.mount(PANE)
   expect((await after.find({ type: 'Text', text: /^\$[\d.]+$/ }))?.text).toBe(
-    '$5.90',
+    '$6.00',
   )
-  expect((await after.find({ type: 'Text', text: /^コスト: / }))?.text).toBe(
-    'コスト: $5.00',
-  )
+  expect(
+    (await after.findAll({ type: 'Text', text: /^コスト: / })).map(
+      found => found.text,
+    ),
+  ).toEqual(['コスト: $0.25', 'コスト: $5.00'])
   await after.unmount()
 })
 
