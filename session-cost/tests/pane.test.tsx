@@ -1,5 +1,6 @@
-import type { On } from 'claude-code'
+import type { AgentSpawnInput, On, SessionContextUsage } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 const PANE = {
   plugin: 'session-cost',
@@ -34,6 +35,18 @@ const answerLanguage = (
   on('env.get', (_, e) => ({ value: e.name === 'LANG' ? lang : undefined }))
 }
 
+// モデルへのリクエストを 1 回送る。ストリームは最後まで読んで初めて終わる。
+const step = async ($: Engine, turnId: string, agentId?: string) => {
+  const stream = $.turn.step({
+    turnId,
+    index: 0,
+    model: 'm',
+    messageCount: 1,
+    ...(agentId === undefined ? {} : { agentId }),
+  })
+  for await (const _ of stream);
+}
+
 test('計測されたコストと積算したトークンを表示する', async ($, on) => {
   answerLanguage(on, 'ja-JP', 'en_US.UTF-8')
   on('command.register', () => ({ value: { command: 'session-cost' } }))
@@ -59,25 +72,32 @@ test('計測されたコストと積算したトークンを表示する', async
     })),
   }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  // エンジンの代役: セッションのコストとコンテキストの使用量。
+  // mod を入れた時点で、すでに $0.2345 かかっている。
+  let ledger: Readonly<{ context: SessionContextUsage; cost: { usd: number } }> = {
+    context: { window: 200000 },
+    cost: { usd: 0.2345 },
+  }
   on('session.usage', () => ({
-    value: {
-      startedAt: 0,
-      context: { window: 200000 },
-      rateLimits: [],
-      // mod を入れた時点で、すでに $0.2345 かかっている。
-      cost: { usd: 0.2345 },
-    },
+    value: { startedAt: 0, rateLimits: [], ...ledger },
   }))
   // セッション開始（時刻 0）から 90 分後に始まる。
   on('clock.now', () => ({ value: now }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
   on('turn.complete', () => ({ text: '' }))
+  const usage = {
+    model: 'claude-fable-5-2',
+    input_tokens: 600,
+    output_tokens: 1200,
+    cache_read_input_tokens: 1_000_000,
+    cache_creation_input_tokens: 0,
+  }
   // エンジンの代役: モデルへのリクエスト 1 回に 6 分かかる。
   let now = 90 * 60_000
   on('turn.step', async function* (_, e) {
     now += 6 * 60_000
 
-    return { ...e, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: null }
+    return { ...e, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage }
   })
   // エンジンの代役: 渡されたモードのラベルをそのまま 1 行に描く。
   on('ui.render', ($, e) => {
@@ -96,36 +116,18 @@ test('計測されたコストと積算したトークンを表示する', async
   expect((await before.find({ type: 'Text', text: /^—$/ }))?.text).toBe('—')
   await before.unmount()
 
-  await $.session.measure({
+  ledger = {
     context: { window: 200000, tokens: 50000, percent: 25 },
-    rateLimits: [],
     cost: { usd: 1.2345 },
+  }
+  await $.session.measure({
+    ...ledger,
+    rateLimits: [],
     changed: ['cost', 'context'],
   })
-  const usage = {
-    model: 'claude-fable-5-2',
-    input_tokens: 600,
-    output_tokens: 1200,
-    cache_read_input_tokens: 1_000_000,
-    cache_creation_input_tokens: 0,
-  }
-  // ターンごとにリクエスト 1 回。うち 1 回はサブエージェントのもの。
-  // ストリームは最後まで読んで初めて終わる。
-  const readAll = async (stream: AsyncIterable<unknown>) => {
-    for await (const _ of stream);
-  }
-  await readAll(
-    $.turn.step({ turnId: 'a', index: 0, model: 'm', messageCount: 1 }),
-  )
-  await readAll(
-    $.turn.step({
-      turnId: 'sub',
-      index: 0,
-      model: 'm',
-      messageCount: 1,
-      agentId: 'agent-1',
-    }),
-  )
+  // リクエストは 2 回。うち 1 回はサブエージェントのもの。
+  await step($, 'a')
+  await step($, 'sub', 'agent-1')
   for (const turnId of ['a', 'b'])
     await $.turn.complete({
       turnId,
@@ -134,6 +136,7 @@ test('計測されたコストと積算したトークンを表示する', async
       // メインのターン 2 回で、合計 30 分動いた。
       durationMs: 15 * 60_000,
       isAborted: false,
+      // ターンの合計にもリクエストのトークン数が載るが、二重には数えない。
       usage,
     })
 
@@ -185,7 +188,146 @@ test('計測されたコストと積算したトークンを表示する', async
   expect((await ui.find({ type: 'Text', text: /%/ }))?.text).toBe(
     '50.0k（25%）',
   )
+  // ワークフローを使っていないので、その内訳は出さない。
+  expect(await ui.find({ type: 'Text', text: /ワークフロー/ })).toBeUndefined()
   await ui.unmount()
+})
+
+test('ワークフローの実行中もリクエストごとにコストとトークンを更新し、ワークフローの内訳を出す', async ($, on) => {
+  answerLanguage(on, 'ja-JP', undefined)
+  on('command.register', () => ({ value: { command: 'session-cost' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.measure', (_, e) => ({ changed: e.changed }))
+  on('clock.now', () => ({ value: 0 }))
+  // エンジンの代役: 応答が届くたびに、その料金がセッションのコストに足される。
+  let ledgerUsd = 0.1
+  on('session.usage', () => ({
+    value: {
+      startedAt: 0,
+      context: { window: 200000 },
+      rateLimits: [],
+      cost: { usd: ledgerUsd },
+    },
+  }))
+  // エンジンの代役: ワークフローが起動したエージェントと、その中で起動されたエージェントに id を振る。
+  on('agent.spawn', (_, e) => ({
+    model: 'm',
+    agentId: e.workflow
+      ? 'wf-1'
+      : e.parentAgentId === 'wf-1'
+        ? 'wf-1-child'
+        : 'sub-1',
+  }))
+  // エンジンの代役: ループごとの、リクエスト 1 回の料金と出力トークン数。
+  const responses: Readonly<Record<string, { usd: number; output: number }>> = {
+    main: { usd: 0.5, output: 100 },
+    'wf-1': { usd: 2, output: 400 },
+    'wf-1-child': { usd: 1, output: 400 },
+    'sub-1': { usd: 0.25, output: 100 },
+  }
+  on('turn.step', async function* (_, e) {
+    const { usd, output } = responses[e.agentId ?? 'main'] ?? { usd: 0, output: 0 }
+    ledgerUsd += usd
+
+    return {
+      ...e,
+      answer: 'ok',
+      toolUses: [],
+      stopReason: 'end_turn',
+      usage: {
+        model: 'm',
+        input_tokens: 1,
+        output_tokens: output,
+        cache_read_input_tokens: 1_000_000,
+        cache_creation_input_tokens: 0,
+      },
+    }
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>below</Text>
+  })
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const spawn = (extra: Pick<AgentSpawnInput, 'workflow' | 'parentAgentId'>) =>
+    $.agent.spawn({
+      tool_use_id: 'toolu_1',
+      prompt: 'p',
+      description: 'd',
+      subagentType: 'workflow-subagent',
+      provider: { plugin: 'engine', tier: 'core' },
+      parentModel: 'm',
+      background: false,
+      fork: false,
+      ...extra,
+    })
+
+  // メインのターンがワークフローを起動して終わったあと、バックグラウンドで動く。
+  await step($, 'main')
+  await spawn({ workflow: { runId: 'wf_1', agentIndex: 1 } })
+  await step($, 'wf-a', 'wf-1')
+  // ワークフローのエージェントが、さらにサブエージェントを起動する。
+  await spawn({ parentAgentId: 'wf-1' })
+  await step($, 'wf-b', 'wf-1-child')
+  await step($, 'wf-c', 'wf-1')
+  // メインから起動した普通のサブエージェントはワークフローに入れない。
+  await spawn({})
+  await step($, 'sub', 'sub-1')
+
+  // メインのターンの終わり（session.measure）を待たずに、その時点のコストを出す。
+  const modes = await $.ui.mount({
+    plugin: 'session-cost',
+    component: 'SessionMode',
+    surface: 'desktop',
+    props: { modes: [] },
+  })
+  expect((await modes.find({ type: 'Button', key: 'toggle-pane' }))?.text).toBe(
+    '💰$5.85',
+  )
+  await modes.unmount()
+
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ type: 'Text', text: /^\$[\d.]+$/ }))?.text).toBe(
+    '$5.85',
+  )
+  expect((await ui.find({ type: 'Text', text: /^出力/ }))?.text).toBe(
+    '出力: 1.4k',
+  )
+  expect((await ui.find({ type: 'Text', text: /^うちワークフロー/ }))?.text).toBe(
+    'うちワークフロー（Ultracode など）',
+  )
+  // 内訳は合計のあとに並ぶ。コストはワークフローのエージェント 2 つの分。
+  const texts = (await ui.findAll({ type: 'Text' })).map(found => found.text)
+  const breakdown = texts.slice(texts.indexOf('うちワークフロー（Ultracode など）') + 1)
+  expect(breakdown.slice(0, 5)).toEqual([
+    'コスト: $5.00',
+    '入力: 3',
+    '出力: 1.2k',
+    'キャッシュ読み込み: 3.00M',
+    'キャッシュ書き込み: 0',
+  ])
+  await ui.unmount()
+
+  // メインのターンの終わりに届く計測値は、ワークフローの分に足さない。
+  ledgerUsd += 0.05
+  await $.session.measure({
+    context: { window: 200000, tokens: 50000, percent: 25 },
+    rateLimits: [],
+    cost: { usd: ledgerUsd },
+    changed: ['cost', 'context'],
+  })
+  // mod の再読み込みでも session.start が届く。ワークフローに割り振った分は残す。
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const after = await $.ui.mount(PANE)
+  expect((await after.find({ type: 'Text', text: /^\$[\d.]+$/ }))?.text).toBe(
+    '$5.90',
+  )
+  expect((await after.find({ type: 'Text', text: /^コスト: / }))?.text).toBe(
+    'コスト: $5.00',
+  )
+  await after.unmount()
 })
 
 test('OS の言語が日本語でなければ英語で表示する', async ($, on) => {

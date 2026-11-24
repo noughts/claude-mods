@@ -5,11 +5,14 @@ export type TokenTotals = Readonly<{
   cacheWrite: number
 }>
 
-// エンジンが計測した値の写し。エンジンが持たない値は欠ける。
+// エンジンが計測した値の写しと、そのコストのうちワークフローに割り振った分。
+// エンジンが持たない値は欠ける。
 export type Measured = Readonly<{
   usd?: number
   contextTokens?: number
   contextPercent?: number
+  // usd のうち、ワークフロー（Ultracode など）のエージェントのリクエストに割り振った分。
+  workflowUsd: number
 }>
 
 // Claude が動いていた時間と、その計測を始めた時点のコスト。
@@ -28,6 +31,10 @@ declare module 'claude-code' {
   interface PluginState {
     'session-cost': {
       tokens: Shaped<TokenTotals>
+      // tokens のうち、ワークフロー（Ultracode など）のエージェントの分。
+      workflowTokens: Shaped<TokenTotals>
+      // ワークフローのエージェントの id。その中で起動されたエージェントも含む。
+      workflowAgents: Shaped<ReadonlyArray<string>>
       measured: Shaped<Measured>
       active: Shaped<Active>
       language: Shaped<Language>
